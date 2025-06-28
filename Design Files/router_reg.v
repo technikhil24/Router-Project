@@ -1,127 +1,114 @@
-module router_sync( input clk,resetn,detect_add,write_enb_reg,read_enb_0,read_enb_1,read_enb_2,empty_0,empty_1,empty_2,full_0,full_1,full_2, 
-					input [1:0]datain,
-					output wire vld_out_0,vld_out_1,vld_out_2,
-					output reg [2:0]write_enb, 
-					output reg fifo_full, soft_reset_0,soft_reset_1,soft_reset_2);
-					
-reg [1:0]temp;
-reg [4:0]count0,count1,count2;
-
-//------------------------------------------------------------------------------------------------------------------------------------------------
+module router_reg(input clk,resetn,packet_valid,
+				  input [7:0] datain,
+				  input fifo_full,detect_add,ld_state,laf_state,full_state,lfd_state,rst_int_reg,
+				  output reg err,parity_done,low_packet_valid,
+				  output reg [7:0] dout);
+				  
+reg [7:0] hold_header_byte,fifo_full_state_byte,internal_parity,packet_parity_byte;
+//--------------------------------------------------------------------------------------------------------------
+//parity done
 always@(posedge clk)
 	begin
 		if(!resetn)
-			temp <= 2'd0;
-		else if(detect_add)
-			temp<=datain;
-	end
+			begin
+				parity_done<=1'b0;
+			end
 	
-//----------------------------------------------------------------------------------------------------------------------------------------------
-//for fifo full
-always@(*)
-	begin
-		case(temp)
-			2'b00: fifo_full=full_0;                // fifo fifo_full takes the value of full of fifo_0
-			2'b01: fifo_full=full_1;                // fifo fifo_full takes the value of full of fifo_1
-			2'b10: fifo_full=full_2;				// fifo fifo_full takes the value of full of fifo_2
-			default fifo_full=0;
-		endcase
-	end
-//------------------------------------------------------------------------------------------------------------------------------------------------
-//write enable
-always@(*)
-	begin 
-				if(write_enb_reg)
-				begin
-					case(temp)
-						2'b00: write_enb=3'b001;				
-						2'b01: write_enb=3'b010;
-						2'b10: write_enb=3'b100;
-						default: write_enb=3'b000;
-					endcase
-				end
+		else 
+			begin
+				if(ld_state && !fifo_full && !packet_valid)
+						parity_done<=1'b1;
+				else if(laf_state && low_packet_valid && !parity_done)
+						parity_done<=1'b1;
 				else
-					write_enb = 3'b000;		
+					begin
+						if(detect_add)
+							parity_done<=1'b0;
+					end
+			end
 	end
-//------------------------------------------------------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------------------------
+//low_packet valid
+always@(posedge clk)
+	begin
+		if(!resetn)
+			low_packet_valid<=1'b0;
+		else 
+			begin
+				if(rst_int_reg)
+					low_packet_valid<=1'b0;
+				if(ld_state==1'b1 && packet_valid==1'b0)
+					low_packet_valid<=1'b1;
+			end
+	end
+//----------------------------------------------------------------------------------------------------------
+//dout
+always@(posedge clk)
 
-//valid out
-assign vld_out_0 = !empty_0;
-assign vld_out_1 = !empty_1;
-assign vld_out_2 = !empty_2;
-//--------------------------------------------------------------------------------------------------------------------------------------------------
-//soft reset counter 
+	begin
+		if(!resetn)
+			dout<=8'b0;
+		else
+		begin
+			if(detect_add && packet_valid)
+				hold_header_byte<=datain;
+			else if(lfd_state)
+				dout<=hold_header_byte;
+			else if(ld_state && !fifo_full)
+				dout<=datain;
+			else if(ld_state && fifo_full)
+				fifo_full_state_byte<=datain;
+			else 
+				begin
+					if(laf_state)
+						dout<=fifo_full_state_byte;
+				end
+		end
+	end
+//-----------------------------------------------------------------------------------------------------
+// internal parity
 always@(posedge clk)
 	begin
 		if(!resetn)
-			count0<=5'b0;
-		else if(vld_out_0)
-			begin
-				if(!read_enb_0)
-					begin
-						if(count0==5'b11110)	
-							begin
-								soft_reset_0<=1'b1;
-								count0<=1'b0;
-							end
-						else
-							begin
-								count0<=count0+1'b1;
-								soft_reset_0<=1'b0;
-							end
-					end
-				else count0<=5'd0;
+			internal_parity<=8'b0;
+		else if(lfd_state)
+			internal_parity<=internal_parity ^ hold_header_byte;
+		else if(ld_state && packet_valid && !full_state)
+			internal_parity<=internal_parity ^ datain;
+		else 
+			begin	
+				if (detect_add)
+					internal_parity<=8'b0;
 			end
-		else count0<=5'd0;
 	end
-	
+//--------------------------------------------------------------------------------------------------------	
+//error and packet_
 always@(posedge clk)
 	begin
 		if(!resetn)
-			count1<=5'b0;
-		else if(vld_out_1)
+			packet_parity_byte<=8'b0;
+		else 
 			begin
-				if(!read_enb_1)
-					begin
-						if(count1==5'b11110)	
-							begin
-								soft_reset_1<=1'b1;
-								count1<=1'b0;
-							end
-						else
-							begin
-								count1<=count1+1'b1;
-								soft_reset_1<=1'b0;
-							end
-					end
-				else count1<=5'd0;
+				if(!packet_valid && ld_state)
+					packet_parity_byte<=datain;
 			end
-		else count1<=5'd0;
 	end
-	
+//-------------------------------------------------------------------------------------------------------------------------------------
+//error
 always@(posedge clk)
 	begin
 		if(!resetn)
-			count2<=5'b0;
-		else if(vld_out_2)
+			err<=1'b0;
+		else 
 			begin
-				if(!read_enb_2)
-					begin
-						if(count2==5'b11110)	
-							begin
-								soft_reset_2<=1'b1;
-								count2<=1'b0;
-							end
-						else
-							begin
-								count2<=count2+1'b1;
-								soft_reset_2<=1'b0;
-							end
-					end
-				else count2<=5'd0;
+				if(parity_done)
+				begin
+					if(internal_parity!=packet_parity_byte)
+						err<=1'b1;
+					else
+						err<=1'b0;
+				end
 			end
-		else count2<=5'd0;
 	end
-	
-	
-endmodule
+
+endmodule 
