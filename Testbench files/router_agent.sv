@@ -1,58 +1,29 @@
-`timescale 1ns/1ps
-`include "uvm_macros.svh"
-import uvm_pkg::*;
+class router_agent extends uvm_agent;
 
-`include "router_if.sv"
-`include "router_test.sv"
+  `uvm_component_utils(router_agent)
 
-module testbench;
-  
-  bit clk;
-  logic resetn;
-  always #2 clk = ~clk;
-  initial begin
-    clk = 0;
-    resetn = 0;
-    #5; 
-    resetn = 1;
-  end
-    // Instantiate the interface
-  router_if i_vif(clk);
-  
-  // DUT
-  router_top dut (
-    .clk          (i_vif.clk),
-    .resetn       (i_vif.resetn),
-    .read_enb_0   (i_vif.read_enb_0),
-    .read_enb_1   (i_vif.read_enb_1),
-    .read_enb_2   (i_vif.read_enb_2),
-    .packet_valid (i_vif.packet_valid),
-    .datain       (i_vif.datain),
-    .detect_add   (i_vif.detect_add),
-    .lfd_state 	  (i_vif.lfd_state),
-    .ld_state     (i_vif.ld_state),
-    .data_out_0   (i_vif.data_out_0),
-    .data_out_1   (i_vif.data_out_1),
-    .data_out_2   (i_vif.data_out_2),
-    .vldout_0     (i_vif.vldout_0),
-    .vldout_1     (i_vif.vldout_1),
-    .vldout_2     (i_vif.vldout_2),
-    .err          (i_vif.err),
-    .busy         (i_vif.busy)
-  );
+  router_driver     drv;
+  router_monitor    mon;
+  router_sequencer  sequencer; // Use custom sequencer
 
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
 
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+	if(get_is_active == UVM_ACTIVE) begin
+      drv       = router_driver::type_id::create("drv", this);
+      sequencer = router_sequencer::type_id::create("sequencer", this);
+    end
+    mon       = router_monitor::type_id::create("mon", this);
+  endfunction
 
+  function void connect_phase(uvm_phase phase);
+    //super.connect_phase(phase);
+    if(get_is_active == UVM_ACTIVE) begin 
+     drv.seq_item_port.connect(sequencer.seq_item_export);
+    end
+  endfunction
 
-
-  initial begin
-    // Make the virtual interface available to all uvm components
-    uvm_config_db#(virtual router_if)::set(null, "env.agent.drv", "vif", i_vif);
-    uvm_config_db#(virtual router_if)::set(null, "env.agent.mon", "vif", i_vif);
-    uvm_config_db #(virtual router_if)::set(null, "*", "vif", i_vif);
-    $dumpfile("dump.vcd");
-    $dumpvars();
-    $display("entering1");
-    run_test("router_test");
-  end
-endmodule
+endclass
